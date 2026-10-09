@@ -1,0 +1,34 @@
+name: drift-check
+
+# Fails when a project's AGENTS_MASTER.md (default branch) is missing, edited by hand,
+# or not synced with this repository. Projects must be public, or add a token.
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compare project copies with the canonical file
+        run: |
+          master=$(tr -d '\r' < AGENTS_MASTER.md | sha256sum | cut -d' ' -f1)
+          fail=0
+          while read -r repo; do
+            [ -z "$repo" ] && continue
+            url="https://raw.githubusercontent.com/${GITHUB_REPOSITORY_OWNER}/${repo}/HEAD/AGENTS_MASTER.md"
+            if ! curl -fsSL "$url" -o copy.md; then
+              echo "::error::${repo}: AGENTS_MASTER.md not reachable"; fail=1; continue
+            fi
+            declared=$(head -n1 copy.md | sed -n 's/.*body-sha256:\([0-9a-f]\{64\}\).*/\1/p')
+            actual=$(tail -n +2 copy.md | tr -d '\r' | sha256sum | cut -d' ' -f1)
+            if [ -z "$declared" ]; then echo "::error::${repo}: header missing, run sync-governance.ps1"; fail=1
+            elif [ "$declared" != "$actual" ]; then echo "::error::${repo}: AGENTS_MASTER.md edited by hand"; fail=1
+            elif [ "$declared" != "$master" ]; then echo "::error::${repo}: outdated, run sync-governance.ps1"; fail=1
+            else echo "OK ${repo}"; fi
+          done < projects.txt
+          exit $fail
